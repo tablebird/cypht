@@ -259,22 +259,10 @@ class Hm_Auth_LDAP extends Hm_Auth {
      * @return boolean
      */
     public function check_credentials($user, $pass) {
-        list($server, $port, $tls) = get_auth_config($this->site_config, 'ldap');
-        $base_dn = $this->site_config->get('ldap_auth_base_dn', false);
-        if ($server && $port && $base_dn) {
-            $user = sprintf('cn=%s,%s', $user, $base_dn);
-            $this->config = [
-                'server' => $server,
-                'port' => $port,
-                'enable_tls' => $tls,
-                'base_dn' => $base_dn,
-                'user' => $user,
-                'pass' => $pass
-            ];
-            return $this->connect();
-        }
-        Hm_Debug::add('Invalid LDAP auth configuration settings');
-        return false;
+        $this->config = $this->site_config->get('ldap')['Personal'];
+        $this->config['loginUser'] = $user;
+        $this->config['loginPass'] = $pass;
+        return $this->connect();
     }
 
     /**
@@ -301,10 +289,38 @@ class Hm_Auth_LDAP extends Hm_Auth {
      */
     protected function auth() {
         $result = @ldap_bind($this->fh, $this->config['user'], $this->config['pass']);
-        ldap_unbind($this->fh);
         if (!$result) {
             Hm_Debug::add(sprintf('LDAP AUTH failed for %s', $this->config['user']));
+        } else {
+            $base_dn = $this->config['base_dn'];
+            $search_term = $this->config['search_term'];
+            $user = $this->config['loginUser'];
+            $pass = $this->config['loginPass'];
+            $search_term = str_replace('%s', $user, $search_term);
+            $search = @ldap_search($this->fh, $base_dn, $search_term);
+            if (!$search) {
+                Hm_Debug::add(sprintf('LDAP AUTH failed for can not search %s returned %s search err %s',
+                 $user, json_encode($search), ldap_error($this->fh)));
+            } else {
+                $entries = @ldap_get_entries($this->fh, $search);
+                if (!$entries) {
+                    Hm_Debug::add(sprintf('LDAP search for %s returned %s entries', $user, json_encode($entries)));
+                } else {
+                    Hm_Debug::add(sprintf('LDAP search for aaaa %s returned %s entries', json_encode($search), json_encode($entries)));
+                    if ($entries['count'] > 0) {
+                        $dn = $entries[0]['dn'];
+                        $result = @ldap_bind($this->fh, $dn, $pass);
+                        if (!$result) {
+                            Hm_Debug::add(sprintf('LDAP AUTH failed for %s', $dn));
+                        }
+                    } else {
+                        Hm_Debug::add(sprintf('LDAP search for %s returned no entries', $user));
+                    }
+                }
+            }
         }
+
+        ldap_unbind($this->fh);
         return $result;
     }
 }
